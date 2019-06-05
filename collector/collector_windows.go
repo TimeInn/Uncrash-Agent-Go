@@ -125,14 +125,35 @@ func GetSession() (int, error) {
 }
 
 func GetProcess() {
-	/*
+/*
 		 Get-WmiObject Win32_PerfFormattedData_PerfProc_Process `
-		>>     | Where-Object { $_.name -inotmatch '_total|idle' } `
-		>>     | ForEach-Object {
-		>>         "Process={0,-25} CPU_Usage={1,-12} Memory_Usage_(MB)={2,-16}" -f `
-		>>             $_.Name,$_.PercentProcessorTime,([math]::Round($_.WorkingSetPrivate/1Mb,2))
-		>>     }
-	*/
+		     | Where-Object { $_.name -inotmatch '_total|idle' } `
+		    | ForEach-Object {
+		         "Process={0,-25} CPU_Usage={1,-12} Memory_Usage_(MB)={2,-16}" -f `
+		            $_.Name,$_.PercentProcessorTime,([math]::Round($_.WorkingSetPrivate/1Mb,2))
+		     }
+*/
+	fmt.Println("wmi")
+	t:=time.Now()
+	type query struct {
+		IDProcess uint32
+		PercentProcessorTime uint64
+		Name string
+		WorkingSetPrivate uint64
+	}
+	var q []query
+	_=wmi.Query("Select IDProcess,PercentProcessorTime,Name,WorkingSetPrivate from Win32_PerfFormattedData_PerfProc_Process", &q)
+	c:=0
+	for _,v:=range q{
+		if getuser(v.IDProcess,false) {
+			fmt.Println(v.Name,v.PercentProcessorTime)
+			c++
+		}
+	}
+	fmt.Println(time.Now().Sub(t))
+	fmt.Println(c)
+	fmt.Println("dll")
+	t=time.Now()
 	h,_:=windows.CreateToolhelp32Snapshot(0x00000002,0)
 	if h < 0 {
 		fmt.Println(syscall.GetLastError())
@@ -140,27 +161,39 @@ func GetProcess() {
 	}
 	var ret windows.ProcessEntry32
 	ret.Size = uint32(unsafe.Sizeof(ret))
+	c = 0
+	for windows.Process32Next(h,&ret)==nil{
+		if getuser(ret.ProcessID,true) {
+			fmt.Println(windows.UTF16ToString(ret.ExeFile[:]))
+			c++
+		}
+	}
+	fmt.Println(time.Now().Sub(t))
+	fmt.Println(c)
+}
+func getuser(pid uint32,b bool) bool {
 	var token windows.Token
 	defer token.Close()
-	for windows.Process32Next(h,&ret)==nil{
-		h2,e:=windows.OpenProcess(0x1000,false,ret.ProcessID)
-		if e!=nil{
-			continue
-		}
-
-		_=windows.OpenProcessToken(h2,syscall.TOKEN_QUERY,&token)
-		//if e == windows.ERROR_INVALID_HANDLE  || e==windows.ERROR_ACCESS_DENIED {
-		//	continue
-		//}
-		tu,e:=token.GetTokenUser()
-		if e!=nil{
-			continue
-		}
-		user, _, _, err := tu.User.Sid.LookupAccount("")
-		fmt.Printf("%+v\n",windows.UTF16ToString(ret.ExeFile[:]))
-		fmt.Println()
-		fmt.Println(user,  err)
+	h2,e:=windows.OpenProcess(0x1000,false,pid)
+	if e!=nil{
+		return false
 	}
-
-
+	if b {
+		var	c,e,k,u windows.Filetime
+		if windows.GetProcessTimes(h2,&c,&e,&k,&u)==nil{
+			user := float64(u.HighDateTime)*429.4967296 + float64(u.LowDateTime)*1e-7
+			kernel := float64(k.HighDateTime)*429.4967296 + float64(k.LowDateTime)*1e-7
+			fmt.Println( user,kernel)
+		}
+	}
+	_=windows.OpenProcessToken(h2,syscall.TOKEN_QUERY,&token)
+	//if e == windows.ERROR_INVALID_HANDLE  || e==windows.ERROR_ACCESS_DENIED {
+	//	continue
+	//}
+	tu,e:=token.GetTokenUser()
+	if e!=nil{
+		return false
+	}
+	_, _, _, _ = tu.User.Sid.LookupAccount("")
+	return true
 }
